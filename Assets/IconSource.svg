@@ -1,34 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="background" x1="128" y1="64" x2="896" y2="960" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#10232a"/>
-      <stop offset="0.55" stop-color="#091216"/>
-      <stop offset="1" stop-color="#030708"/>
-    </linearGradient>
-    <linearGradient id="mark" x1="250" y1="230" x2="760" y2="730" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#75e6ff"/>
-      <stop offset="0.48" stop-color="#55f0bd"/>
-      <stop offset="1" stop-color="#91ff72"/>
-    </linearGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="22"/>
-    </filter>
-  </defs>
-
-  <rect width="1024" height="1024" fill="url(#background)"/>
-  <circle cx="512" cy="465" r="330" fill="#4de3b0" opacity="0.08" filter="url(#glow)"/>
-
-  <g fill="none" stroke="#83ffd0" stroke-width="8" opacity="0.09">
-    <path d="M144 248H880M144 392H880M144 536H880M144 680H880M144 824H880"/>
-    <path d="M224 168V856M368 168V856M512 168V856M656 168V856M800 168V856"/>
-  </g>
-
-  <path d="M250 714V310L362 246L660 618V310L774 246V714L660 778L364 408V714L250 778Z" fill="url(#mark)"/>
-  <path d="M250 310L364 408V714L250 778Z" fill="#39bad3" opacity="0.82"/>
-  <path d="M660 618L774 714L660 778Z" fill="#55d88e" opacity="0.75"/>
-  <path d="M362 246L660 618V778L364 408Z" fill="#b2ff70" opacity="0.2"/>
-
-  <rect x="202" y="810" width="620" height="92" rx="24" fill="#061013" stroke="#63eeb4" stroke-width="4" opacity="0.96"/>
-  <path d="M250 842L286 856L250 870" fill="none" stroke="#8fff76" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="320" y="866" width="160" height="12" rx="6" fill="#75e6ff"/>
+  <rect width="1024" height="1024" fill="#080c0e"/>
+  <path d="M278 342L470 512L278 682" fill="none" stroke="#72f1b8" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M552 682H770" fill="none" stroke="#72f1b8" stroke-width="72" stroke-linecap="round"/>
 </svg>
