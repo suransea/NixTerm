@@ -29,7 +29,6 @@ final class QEMUTerminalBackend {
             "-machine", "virt",
             "-cpu", "cortex-a53",
             "-accel", "tcg,thread=single,tb-size=64",
-            "-icount", "shift=auto",
             "-rtc", "clock=vm",
             "-smp", "1",
             "-m", "256",
@@ -46,7 +45,7 @@ final class QEMUTerminalBackend {
             "-serial", "chardev:serial0",
             "-kernel", kernel.path,
             "-initrd", initramfs.path,
-            "-append", "console=ttyAMA0,115200 rdinit=/init panic=-1 loglevel=4",
+            "-append", "console=ttyAMA0,115200 rdinit=/init panic=-1 loglevel=4 nowatchdog",
         ]
 
         report("Booting Nix-built aarch64 Linux with interpreted QEMU...\r\n")

@@ -22,6 +22,25 @@
       makeGuestBundle =
         host:
         let
+          initialCompdump = host.runCommand "nixterm-zcompdump" { nativeBuildInputs = [ host.zsh ]; } ''
+            mkdir -p "$out"
+            ZSH_COMPDUMP="$out/.zcompdump" zsh -dfc '
+              fpath=(
+                ${guest.oh-my-zsh}/share/oh-my-zsh/plugins/git
+                ${guest.oh-my-zsh}/share/oh-my-zsh/functions
+                ${guest.oh-my-zsh}/share/oh-my-zsh/completions
+                ${guest.oh-my-zsh}/share/oh-my-zsh/custom/functions
+                ${guest.oh-my-zsh}/share/oh-my-zsh/custom/completions
+                /run/nixterm-zsh/cache/completions
+                $fpath
+              )
+              autoload -U compinit
+              compinit -u -d "$ZSH_COMPDUMP"
+              print >> "$ZSH_COMPDUMP"
+              print -r -- "#omz revision: " >> "$ZSH_COMPDUMP"
+              print -r -- "#omz fpath: $fpath" >> "$ZSH_COMPDUMP"
+            '
+          '';
           runtimeInit = host.writeScript "nixterm-runtime-init" ''
             #!${busybox}/bin/sh
 
@@ -56,13 +75,29 @@
             ZSH_THEME="robbyrussell"
             plugins=(git)
             PROMPT_EOL_MARK=""
-            ZSH_COMPDUMP=/root/.cache/oh-my-zsh/.zcompdump
+            ZSH_CACHE_DIR="$ZDOTDIR/cache"
+            ZSH_COMPDUMP="$ZDOTDIR/.zcompdump"
             ZSH_DISABLE_COMPFIX=true
             zstyle ':omz:update' mode disabled
-            source "$ZSH/oh-my-zsh.sh"
+            mkdir -p "$ZSH_CACHE_DIR"
+            cp -p ${initialCompdump}/.zcompdump "$ZSH_COMPDUMP"
+            fpath=(
+              "$ZSH/plugins/git"
+              "$ZSH/functions"
+              "$ZSH/completions"
+              "$ZSH_CACHE_DIR/completions"
+              $fpath
+            )
+            autoload -U compinit
+            compinit -C -d "$ZSH_COMPDUMP"
+            for omz_lib in async_prompt completion directories functions git history key-bindings misc termsupport theme-and-appearance; do
+              source "$ZSH/lib/$omz_lib.zsh"
+            done
+            source "$ZSH/plugins/git/git.plugin.zsh"
+            source "$ZSH/themes/robbyrussell.zsh-theme"
             nixterm_update_size() {
               local columns rows
-              if read columns rows < /root/.nixterm-size; then
+              if [[ -r /root/.nixterm-size ]] && read columns rows < /root/.nixterm-size; then
                 stty cols "$columns" rows "$rows"
               fi
             }
@@ -82,7 +117,7 @@
             cd /root
 
             exec </dev/ttyAMA0 >/dev/ttyAMA0 2>&1
-            if read columns rows < /root/.nixterm-size; then
+            if [ -r /root/.nixterm-size ] && read columns rows < /root/.nixterm-size; then
               stty -F /dev/ttyAMA0 cols "$columns" rows "$rows"
             fi
             echo
