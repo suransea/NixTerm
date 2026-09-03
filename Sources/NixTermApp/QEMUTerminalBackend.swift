@@ -18,12 +18,11 @@ final class QEMUTerminalBackend {
             return
         }
 
-        let socketURL = FileManager.default.temporaryDirectory.appendingPathComponent("nixterm-serial.sock")
+        let serialPort: UInt16 = 37_733
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             report("Unable to locate the persistent Documents directory.\r\n")
             return
         }
-        unlink(socketURL.path)
         let arguments = [
             "-machine", "virt",
             "-cpu", "cortex-a53",
@@ -36,7 +35,7 @@ final class QEMUTerminalBackend {
             "-audio", "none",
             "-nic", "user,model=virtio-net-pci",
             "-virtfs", "local,path=\(documents.path),mount_tag=hostshare,security_model=none,id=hostshare",
-            "-chardev", "socket,id=serial0,path=\(socketURL.path),server=on,wait=off",
+            "-chardev", "socket,id=serial0,host=127.0.0.1,port=\(serialPort),server=on,wait=off",
             "-serial", "chardev:serial0",
             "-kernel", kernel.path,
             "-initrd", initramfs.path,
@@ -51,7 +50,7 @@ final class QEMUTerminalBackend {
                 return
             }
             queue.async {
-                self.connect(to: socketURL.path)
+                self.connect(to: serialPort)
             }
         }
     }
@@ -84,31 +83,29 @@ final class QEMUTerminalBackend {
         }
     }
 
-    private func connect(to path: String) {
+    private func connect(to port: UInt16) {
         for _ in 0 ..< 300 {
-            let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+            let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
             guard descriptor >= 0 else {
                 report("Unable to create the serial socket.\r\n")
                 return
             }
 
-            var address = sockaddr_un()
-            address.sun_family = sa_family_t(AF_UNIX)
-            let pathBytes = path.utf8CString
-            guard pathBytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = port.bigEndian
+            let converted = "127.0.0.1".withCString {
+                inet_pton(AF_INET, $0, &address.sin_addr)
+            }
+            guard converted == 1 else {
                 Darwin.close(descriptor)
-                report("Serial socket path is too long.\r\n")
+                report("Unable to configure the serial socket.\r\n")
                 return
             }
-            withUnsafeMutableBytes(of: &address.sun_path) { destination in
-                pathBytes.withUnsafeBytes { source in
-                    destination.copyMemory(from: source)
-                }
-            }
-            let length = socklen_t(MemoryLayout<sa_family_t>.size + pathBytes.count)
             let result = withUnsafePointer(to: &address) { pointer in
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.connect(descriptor, $0, length)
+                    Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
             if result == 0 {
