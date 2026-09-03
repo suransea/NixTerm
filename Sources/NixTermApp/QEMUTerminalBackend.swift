@@ -25,6 +25,11 @@ final class QEMUTerminalBackend {
             report("Unable to locate the persistent Documents directory.\r\n")
             return
         }
+        let readme = documents.appendingPathComponent("README.txt")
+        if !FileManager.default.fileExists(atPath: readme.path) {
+            let contents = "NixTerm home directory\n\nFiles stored here are available as /root in the Linux guest.\n"
+            try? contents.write(to: readme, atomically: true, encoding: .utf8)
+        }
         let arguments = [
             "-machine", "virt",
             "-cpu", "cortex-a53",

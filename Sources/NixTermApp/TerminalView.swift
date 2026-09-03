@@ -116,6 +116,7 @@ final class LinuxTerminalView: SwiftTerm.TerminalView, TerminalViewDelegate {
     override init(frame: CGRect) {
         var options = TerminalOptions.default
         options.scrollback = 10_000
+        options.cursorStyle = .steadyBlock
         super.init(
             frame: frame,
             font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
