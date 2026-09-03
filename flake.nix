@@ -56,7 +56,7 @@
             export PS1='\u@nixterm:\w\$ '
 
             mkdir -p /dev /proc /sys /run /tmp /root /etc
-            mount -t devtmpfs devtmpfs /dev
+            [ -e /dev/null ] || mount -t devtmpfs devtmpfs /dev
             mkdir -p /dev/pts /dev/shm
             mount -t proc proc /proc
             mount -t sysfs sysfs /sys
@@ -123,6 +123,8 @@
             echo
             echo 'NixTerm Linux'
             echo "Kernel $(uname -r), aarch64, packages selected by guest-packages.nix"
+            set -- $(cat /proc/uptime)
+            echo "Guest ready after $1s"
             echo 'Home: iOS Documents via virtio-9p; network: QEMU SLiRP'
             echo
             exec setsid cttyhack ${guest.zsh}/bin/zsh -l

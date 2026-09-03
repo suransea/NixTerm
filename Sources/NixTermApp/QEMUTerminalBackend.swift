@@ -13,7 +13,6 @@ final class QEMUTerminalBackend {
 
         guard
             let kernel = Bundle.main.url(forResource: "Image", withExtension: nil),
-            let initramfs = Bundle.main.url(forResource: "initramfs", withExtension: "cpio"),
             let rootFileSystem = Bundle.main.url(forResource: "root", withExtension: "squashfs")
         else {
             report("Nix-built Linux guest resources are missing.\r\n")
@@ -49,17 +48,18 @@ final class QEMUTerminalBackend {
             "-chardev", "socket,id=serial0,host=127.0.0.1,port=\(serialPort),server=on,wait=off",
             "-serial", "chardev:serial0",
             "-kernel", kernel.path,
-            "-initrd", initramfs.path,
-            "-append", "console=ttyAMA0,115200 rdinit=/init panic=-1 loglevel=4 nowatchdog",
+            "-append", "console=ttyAMA0,115200 root=/dev/vda rootfstype=squashfs ro init=/init panic=-1 loglevel=4 nowatchdog",
         ]
 
-        report("Booting Nix-built aarch64 Linux with interpreted QEMU...\r\n")
+        let startedAt = Date()
+        report("Loading QEMU runtime...\r\n")
         runner.start(withArguments: arguments) { [weak self] error in
             guard let self else { return }
             if let error {
                 report("QEMU failed: \(error.localizedDescription)\r\n")
                 return
             }
+            report(String(format: "Starting Linux (QEMU loaded in %.1fs)...\r\n", Date().timeIntervalSince(startedAt)))
             queue.async {
                 self.connect(to: serialPort)
             }
