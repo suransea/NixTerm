@@ -32,7 +32,7 @@ final class QEMUTerminalBackend {
             "-icount", "shift=auto",
             "-rtc", "clock=vm",
             "-smp", "1",
-            "-m", "1024",
+            "-m", "256",
             "-nodefaults",
             "-nographic",
             "-no-reboot",
@@ -80,7 +80,14 @@ final class QEMUTerminalBackend {
         }
     }
 
-    func resize(columns _: Int, rows _: Int) {}
+    func resize(columns: Int, rows: Int) {
+        guard columns > 0, rows > 0,
+              let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        else { return }
+
+        let sizeFile = documents.appendingPathComponent(".nixterm-size")
+        try? "\(columns) \(rows)\n".write(to: sizeFile, atomically: true, encoding: .utf8)
+    }
 
     func stop() {
         queue.async { [weak self] in

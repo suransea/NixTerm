@@ -8,14 +8,17 @@ guest: with guest; [
   findutils
   gawk
   gitMinimal
+  glibc.bin
   gnugrep
   gnused
   gnutar
   gzip
   less
   openssh
+  oh-my-zsh
   procps
   util-linux
   which
   xz
+  zsh
 ]

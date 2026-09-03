@@ -4,7 +4,12 @@ import SwiftUI
 struct NixTermApp: App {
     var body: some Scene {
         WindowGroup {
-            TerminalView()
+            ZStack {
+                Color(red: 0.157, green: 0.173, blue: 0.204)
+                    .ignoresSafeArea()
+                TerminalView()
+            }
+            .preferredColorScheme(.dark)
         }
     }
 }

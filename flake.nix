@@ -30,7 +30,9 @@
             export TERM=xterm-256color
             export USER=root
             export LOGNAME=root
-            export SHELL=${guest.bashInteractive}/bin/bash
+            export LANG=C.UTF-8
+            export LC_ALL=C.UTF-8
+            export SHELL=${guest.zsh}/bin/zsh
             export SSL_CERT_FILE=${guest.cacert}/etc/ssl/certs/ca-bundle.crt
             export PS1='\u@nixterm:\w\$ '
 
@@ -47,11 +49,32 @@
             hostname nixterm
             chmod 1777 /tmp
 
+            export ZDOTDIR=/run/nixterm-zsh
+            mkdir -p "$ZDOTDIR"
+            cat > "$ZDOTDIR/.zshrc" <<'EOF'
+            export ZSH=${guest.oh-my-zsh}/share/oh-my-zsh
+            ZSH_THEME="robbyrussell"
+            plugins=(git)
+            PROMPT_EOL_MARK=""
+            ZSH_COMPDUMP=/root/.cache/oh-my-zsh/.zcompdump
+            ZSH_DISABLE_COMPFIX=true
+            zstyle ':omz:update' mode disabled
+            source "$ZSH/oh-my-zsh.sh"
+            nixterm_update_size() {
+              local columns rows
+              if read columns rows < /root/.nixterm-size; then
+                stty cols "$columns" rows "$rows"
+              fi
+            }
+            precmd_functions+=(nixterm_update_size)
+            [[ -r /root/.zshrc ]] && source /root/.zshrc
+            EOF
+
             ip link set lo up
             ip link set eth0 up
             ip address add 10.0.2.15/24 dev eth0
             ip route add default via 10.0.2.2
-            echo 'root:x:0:0:root:/root:${guest.bashInteractive}/bin/bash' > /etc/passwd
+            echo 'root:x:0:0:root:/root:${guest.zsh}/bin/zsh' > /etc/passwd
             echo 'root:x:0:' > /etc/group
             echo 'nameserver 10.0.2.3' > /etc/resolv.conf
             mount -t 9p -o trans=virtio,version=9p2000.L hostshare /root || \
@@ -59,12 +82,15 @@
             cd /root
 
             exec </dev/ttyAMA0 >/dev/ttyAMA0 2>&1
+            if read columns rows < /root/.nixterm-size; then
+              stty -F /dev/ttyAMA0 cols "$columns" rows "$rows"
+            fi
             echo
             echo 'NixTerm Linux'
             echo "Kernel $(uname -r), aarch64, packages selected by guest-packages.nix"
             echo 'Home: iOS Documents via virtio-9p; network: QEMU SLiRP'
             echo
-            exec setsid cttyhack ${guest.bashInteractive}/bin/bash --noprofile --norc -i
+            exec setsid cttyhack ${guest.zsh}/bin/zsh -l
           '';
           bootInit = host.writeScript "nixterm-boot-init" ''
             #!${busybox}/bin/sh

@@ -1,6 +1,6 @@
 # NixTerm
 
-NixTerm runs a real, Nix-built aarch64 Linux environment inside interpreted QEMU on stock iOS. SwiftTerm is connected directly to the guest serial console, so the Linux kernel and Bash own command parsing, PTYs, signals, pipes, jobs, and process management.
+NixTerm runs a real, Nix-built aarch64 Linux environment inside interpreted QEMU on stock iOS. SwiftTerm is connected directly to the guest serial console, so the Linux kernel and Zsh own command parsing, PTYs, signals, pipes, jobs, and process management.
 
 The NixTerm application source is MIT licensed. Embedded and generated third-party components retain their own licenses; in particular, QEMU and Linux are GPL-licensed. See `THIRD_PARTY_NOTICES.md` before distributing binaries.
 
@@ -9,14 +9,14 @@ No JIT, jailbreak, Hypervisor.framework, or downloaded native code is required. 
 ## Architecture
 
 ```text
-SwiftTerm <-> loopback TCP serial <-> QEMU TCI <-> Linux ttyAMA0 <-> Bash
+SwiftTerm <-> loopback TCP serial <-> QEMU TCI <-> Linux ttyAMA0 <-> Zsh
                                          |
                      Nix-built kernel + tiny initramfs + SquashFS
 ```
 
 `guest-packages.nix` is the package manifest. Nix copies the complete aarch64-linux closure of those packages into a read-only SquashFS image. A small uncompressed initramfs mounts that image and starts the guest. Adding or removing an entry therefore changes what is actually present in the guest, rather than only hiding a precompiled command.
 
-The initial guest includes Bash, GNU core/text/archive tools, curl, Git, OpenSSH, procps, util-linux, and CA certificates. QEMU SLiRP provides user-mode networking. The app's Documents directory is mounted as `/root` through virtio-9p, preserving user files across launches and upgrades. The same directory is available in Files under `On My iPhone > NixTerm`, so Files and the guest shell see changes immediately.
+The initial guest uses Zsh with Oh My Zsh and includes Bash, GNU core/text/archive tools, curl, Git, OpenSSH, procps, util-linux, and CA certificates. SwiftTerm uses the One Dark palette. QEMU SLiRP provides user-mode networking. The app's Documents directory is mounted as `/root` through virtio-9p, preserving user files across launches and upgrades. The same directory is available in Files under `On My iPhone > NixTerm`, so Files and the guest shell see changes immediately.
 
 ## Prepare
 
