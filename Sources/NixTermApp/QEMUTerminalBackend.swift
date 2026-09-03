@@ -7,6 +7,14 @@ final class QEMUTerminalBackend {
     private let runner = NixTermQEMURunner()
     private var socketDescriptor: Int32 = -1
     private var output: ((Data) -> Void)?
+    private var quickStart: QuickStartController?
+    private var acceptingInput = false
+    private var serialProbe = Data()
+    private var startedAt = Date()
+    private var reportedReady = false
+
+    private let snapshotMarker = Data("\u{1B}]777;nixterm-snapshot-ready\u{07}".utf8)
+    private let readyMarker = Data("\u{1B}]777;nixterm-ready\u{07}".utf8)
 
     func start(output: @escaping (Data) -> Void) {
         self.output = output
@@ -19,7 +27,8 @@ final class QEMUTerminalBackend {
             return
         }
 
-        let serialPort: UInt16 = 37_733
+        let serialPort: UInt16 = 37733
+        let monitorPort: UInt16 = 37734
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             report("Unable to locate the persistent Documents directory.\r\n")
             return
@@ -29,7 +38,13 @@ final class QEMUTerminalBackend {
             let contents = "NixTerm home directory\n\nFiles stored here are available as /root in the Linux guest.\n"
             try? contents.write(to: readme, atomically: true, encoding: .utf8)
         }
-        let arguments = [
+        quickStart = QuickStartController(
+            rootFileSystem: rootFileSystem,
+            report: { [weak self] message in self?.report(message) },
+            releaseGuest: { [weak self] in self?.releaseGuestBarrier() }
+        )
+
+        var arguments = [
             "-machine", "virt",
             "-cpu", "cortex-a53",
             "-accel", "tcg,thread=single,tb-size=64",
@@ -47,40 +62,33 @@ final class QEMUTerminalBackend {
             "-virtfs", "local,path=\(documents.path),mount_tag=hostshare,security_model=none,id=hostshare",
             "-chardev", "socket,id=serial0,host=127.0.0.1,port=\(serialPort),server=on,wait=off",
             "-serial", "chardev:serial0",
+            "-qmp", "tcp:127.0.0.1:\(monitorPort),server=on,wait=off",
             "-kernel", kernel.path,
             "-append", "console=ttyAMA0,115200 root=/dev/vda rootfstype=squashfs ro init=/init panic=-1 loglevel=4 nowatchdog",
         ]
+        if quickStart?.shouldRestore == true {
+            arguments += ["-incoming", "defer"]
+        }
 
-        let startedAt = Date()
-        report("Loading QEMU runtime...\r\n")
+        startedAt = Date()
+        report(quickStart?.shouldRestore == true ? "Restoring quick start...\r\n" : "Preparing Linux...\r\n")
         runner.start(withArguments: arguments) { [weak self] error in
             guard let self else { return }
             if let error {
                 report("QEMU failed: \(error.localizedDescription)\r\n")
                 return
             }
-            report(String(format: "Starting Linux (QEMU loaded in %.1fs)...\r\n", Date().timeIntervalSince(startedAt)))
             queue.async {
                 self.connect(to: serialPort)
             }
+            quickStart?.connect(to: monitorPort)
         }
     }
 
     func send(_ data: Data) {
         queue.async { [weak self] in
-            guard let self, socketDescriptor >= 0 else { return }
-            data.withUnsafeBytes { bytes in
-                guard var pointer = bytes.baseAddress else { return }
-                var remaining = bytes.count
-                while remaining > 0 {
-                    let count = Darwin.write(self.socketDescriptor, pointer, remaining)
-                    if count <= 0 {
-                        return
-                    }
-                    remaining -= count
-                    pointer = pointer.advanced(by: count)
-                }
-            }
+            guard let self, acceptingInput else { return }
+            write(data)
         }
     }
 
@@ -94,6 +102,7 @@ final class QEMUTerminalBackend {
     }
 
     func stop() {
+        quickStart?.stop()
         queue.async { [weak self] in
             guard let self, socketDescriptor >= 0 else { return }
             Darwin.close(socketDescriptor)
@@ -146,7 +155,23 @@ final class QEMUTerminalBackend {
             if count <= 0 {
                 break
             }
-            output?(Data(buffer[0 ..< count]))
+            let data = Data(buffer[0 ..< count])
+            output?(data)
+            serialProbe.append(data)
+            if serialProbe.count > 512 {
+                serialProbe.removeFirst(serialProbe.count - 512)
+            }
+            if serialProbe.range(of: snapshotMarker) != nil {
+                if let quickStart {
+                    quickStart.guestReachedBarrier()
+                } else {
+                    releaseGuestBarrier()
+                }
+            }
+            if !reportedReady, serialProbe.range(of: readyMarker) != nil {
+                reportedReady = true
+                report(String(format: "\r\nReady in %.2fs.\r\n", Date().timeIntervalSince(startedAt)))
+            }
         }
         queue.async { [weak self] in
             guard let self, socketDescriptor == descriptor else { return }
@@ -157,5 +182,29 @@ final class QEMUTerminalBackend {
 
     private func report(_ message: String) {
         output?(Data(message.utf8))
+    }
+
+    private func releaseGuestBarrier() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            write(Data("\n".utf8))
+            acceptingInput = true
+        }
+    }
+
+    private func write(_ data: Data) {
+        guard socketDescriptor >= 0 else { return }
+        data.withUnsafeBytes { bytes in
+            guard var pointer = bytes.baseAddress else { return }
+            var remaining = bytes.count
+            while remaining > 0 {
+                let count = Darwin.write(socketDescriptor, pointer, remaining)
+                if count <= 0 {
+                    return
+                }
+                remaining -= count
+                pointer = pointer.advanced(by: count)
+            }
+        }
     }
 }

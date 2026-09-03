@@ -72,13 +72,9 @@
             mkdir -p "$ZDOTDIR"
             cat > "$ZDOTDIR/.zshrc" <<'EOF'
             export ZSH=${guest.oh-my-zsh}/share/oh-my-zsh
-            ZSH_THEME="robbyrussell"
-            plugins=(git)
             PROMPT_EOL_MARK=""
             ZSH_CACHE_DIR="$ZDOTDIR/cache"
             ZSH_COMPDUMP="$ZDOTDIR/.zcompdump"
-            ZSH_DISABLE_COMPFIX=true
-            zstyle ':omz:update' mode disabled
             mkdir -p "$ZSH_CACHE_DIR"
             cp -p ${initialCompdump}/.zcompdump "$ZSH_COMPDUMP"
             fpath=(
@@ -90,18 +86,26 @@
             )
             autoload -U compinit
             compinit -C -d "$ZSH_COMPDUMP"
-            for omz_lib in async_prompt completion directories functions git history key-bindings misc termsupport theme-and-appearance; do
-              source "$ZSH/lib/$omz_lib.zsh"
-            done
-            source "$ZSH/plugins/git/git.plugin.zsh"
-            source "$ZSH/themes/robbyrussell.zsh-theme"
+            zstyle ':completion:*' menu select
+
+            HISTFILE=/root/.zsh_history
+            HISTSIZE=50000
+            SAVEHIST=10000
+            setopt append_history extended_history hist_expire_dups_first hist_ignore_dups hist_ignore_space share_history
+            bindkey -e
+            alias g=git ga='git add' gc='git commit' gd='git diff' gl='git pull' gp='git push' gst='git status'
+            PROMPT='%(?.%F{green}.%F{red})➜  %F{cyan}%1~%f '
             nixterm_update_size() {
               local columns rows
               if [[ -r /root/.nixterm-size ]] && read columns rows < /root/.nixterm-size; then
                 stty cols "$columns" rows "$rows"
               fi
             }
-            precmd_functions+=(nixterm_update_size)
+            nixterm_report_ready() {
+              printf '\033]777;nixterm-ready\007'
+              precmd_functions=(''${precmd_functions:#nixterm_report_ready})
+            }
+            precmd_functions+=(nixterm_update_size nixterm_report_ready)
             [[ -r /root/.zshrc ]] && source /root/.zshrc
             EOF
 
@@ -112,6 +116,10 @@
             echo 'root:x:0:0:root:/root:${guest.zsh}/bin/zsh' > /etc/passwd
             echo 'root:x:0:' > /etc/group
             echo 'nameserver 10.0.2.3' > /etc/resolv.conf
+
+            # QEMU cannot migrate an attached 9p export, so pause immediately before mounting it.
+            printf '\033]777;nixterm-snapshot-ready\007'
+            read -r _ </dev/ttyAMA0
             mount -t 9p -o trans=virtio,version=9p2000.L hostshare /root || \
               echo 'warning: persistent Documents mount unavailable' >&2
             cd /root
@@ -123,8 +131,6 @@
             echo
             echo 'NixTerm Linux'
             echo "Kernel $(uname -r), aarch64, packages selected by guest-packages.nix"
-            set -- $(cat /proc/uptime)
-            echo "Guest ready after $1s"
             echo 'Home: iOS Documents via virtio-9p; network: QEMU SLiRP'
             echo
             exec setsid cttyhack ${guest.zsh}/bin/zsh -l
