@@ -3,6 +3,7 @@ import Foundation
 
 final class QEMUTerminalBackend {
     private let queue = DispatchQueue(label: "dev.nixterm.qemu.serial", qos: .userInteractive)
+    private let readQueue = DispatchQueue(label: "dev.nixterm.qemu.serial.read", qos: .userInteractive)
     private let runner = NixTermQEMURunner()
     private var socketDescriptor: Int32 = -1
     private var output: ((Data) -> Void)?
@@ -12,7 +13,8 @@ final class QEMUTerminalBackend {
 
         guard
             let kernel = Bundle.main.url(forResource: "Image", withExtension: nil),
-            let initramfs = Bundle.main.url(forResource: "initramfs.cpio", withExtension: "gz")
+            let initramfs = Bundle.main.url(forResource: "initramfs", withExtension: "cpio"),
+            let rootFileSystem = Bundle.main.url(forResource: "root", withExtension: "squashfs")
         else {
             report("Nix-built Linux guest resources are missing.\r\n")
             return
@@ -26,7 +28,9 @@ final class QEMUTerminalBackend {
         let arguments = [
             "-machine", "virt",
             "-cpu", "cortex-a53",
-            "-accel", "tcg,tb-size=64",
+            "-accel", "tcg,thread=single,tb-size=64",
+            "-icount", "shift=auto",
+            "-rtc", "clock=vm",
             "-smp", "1",
             "-m", "1024",
             "-nodefaults",
@@ -35,6 +39,8 @@ final class QEMUTerminalBackend {
             "-audio", "none",
             "-netdev", "user,id=net0",
             "-device", "virtio-net-pci,netdev=net0,romfile=",
+            "-drive", "file=\(rootFileSystem.path),format=raw,if=none,id=rootfs,readonly=on",
+            "-device", "virtio-blk-pci,drive=rootfs,romfile=",
             "-virtfs", "local,path=\(documents.path),mount_tag=hostshare,security_model=none,id=hostshare",
             "-chardev", "socket,id=serial0,host=127.0.0.1,port=\(serialPort),server=on,wait=off",
             "-serial", "chardev:serial0",
@@ -111,7 +117,9 @@ final class QEMUTerminalBackend {
             }
             if result == 0 {
                 socketDescriptor = descriptor
-                readOutput()
+                readQueue.async { [weak self] in
+                    self?.readOutput(from: descriptor)
+                }
                 return
             }
             Darwin.close(descriptor)
@@ -120,14 +128,19 @@ final class QEMUTerminalBackend {
         report("Timed out connecting to the Linux serial console.\r\n")
     }
 
-    private func readOutput() {
+    private func readOutput(from descriptor: Int32) {
         var buffer = [UInt8](repeating: 0, count: 16384)
-        while socketDescriptor >= 0 {
-            let count = Darwin.read(socketDescriptor, &buffer, buffer.count)
+        while true {
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
             if count <= 0 {
                 break
             }
             output?(Data(buffer[0 ..< count]))
+        }
+        queue.async { [weak self] in
+            guard let self, socketDescriptor == descriptor else { return }
+            Darwin.close(descriptor)
+            socketDescriptor = -1
         }
     }
 

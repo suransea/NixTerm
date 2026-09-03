@@ -50,10 +50,12 @@ if [[ ! -d "${QEMU_FRAMEWORKS:-.build/QEMU/Frameworks}" ]]; then
 fi
 if [[ -n "${GUEST_BUNDLE:-}" ]]; then
   mkdir -p Resources/Guest
+  rm -f Resources/Guest/initramfs.cpio.gz Resources/Guest/initramfs.cpio.lz4
   install -m 0644 "$GUEST_BUNDLE/Image" Resources/Guest/Image
-  install -m 0644 "$GUEST_BUNDLE/initramfs.cpio.gz" Resources/Guest/initramfs.cpio.gz
+  install -m 0644 "$GUEST_BUNDLE/initramfs.cpio" Resources/Guest/initramfs.cpio
+  install -m 0644 "$GUEST_BUNDLE/root.squashfs" Resources/Guest/root.squashfs
 fi
-if [[ ! -s Resources/Guest/Image || ! -s Resources/Guest/initramfs.cpio.gz ]]; then
+if [[ ! -s Resources/Guest/Image || ! -s Resources/Guest/initramfs.cpio || ! -s Resources/Guest/root.squashfs ]]; then
   printf 'Guest resources are missing. Run nix run .#prepare-guest first.\n' >&2
   exit 1
 fi

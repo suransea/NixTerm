@@ -9,12 +9,12 @@ No JIT, jailbreak, Hypervisor.framework, or downloaded native code is required. 
 ## Architecture
 
 ```text
-SwiftTerm <-> Unix serial socket <-> QEMU TCI <-> Linux ttyAMA0 <-> Bash
+SwiftTerm <-> loopback TCP serial <-> QEMU TCI <-> Linux ttyAMA0 <-> Bash
                                          |
-                             Nix-built kernel + initramfs
+                     Nix-built kernel + tiny initramfs + SquashFS
 ```
 
-`guest-packages.nix` is the package manifest. Nix copies the complete aarch64-linux closure of those packages into the initramfs. Adding or removing an entry therefore changes what is actually present in the guest, rather than only hiding a precompiled command.
+`guest-packages.nix` is the package manifest. Nix copies the complete aarch64-linux closure of those packages into a read-only SquashFS image. A small uncompressed initramfs mounts that image and starts the guest. Adding or removing an entry therefore changes what is actually present in the guest, rather than only hiding a precompiled command.
 
 The initial guest includes Bash, GNU core/text/archive tools, curl, Git, OpenSSH, procps, util-linux, and CA certificates. QEMU SLiRP provides user-mode networking. The app's Documents directory is mounted as `/root` through virtio-9p, preserving user files across launches and upgrades. The same directory is available in Files under `On My iPhone > NixTerm`, so Files and the guest shell see changes immediately.
 
@@ -50,7 +50,7 @@ The Mac checkout must contain `Resources/Guest` generated on Linux and `.build/Q
 ## Current Limits
 
 - TCI interprets guest code and is substantially slower than JIT or hardware virtualization.
-- The guest currently uses a large initramfs and 1 GiB RAM; a compressed read-only block image will reduce memory use.
+- The guest uses a read-only SquashFS root and 1 GiB RAM; package writes require a future writable overlay.
 - Only one VM can run in an app process. A QEMU hang before its control channel is available requires restarting the app.
 - App suspension follows normal iOS lifecycle rules.
 - Serial-console window-size propagation and graceful QMP shutdown are not implemented yet.

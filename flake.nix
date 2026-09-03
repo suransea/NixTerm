@@ -22,7 +22,7 @@
       makeGuestBundle =
         host:
         let
-          init = host.writeScript "nixterm-init" ''
+          runtimeInit = host.writeScript "nixterm-runtime-init" ''
             #!${busybox}/bin/sh
 
             export PATH=${guestPath}
@@ -34,13 +34,16 @@
             export SSL_CERT_FILE=${guest.cacert}/etc/ssl/certs/ca-bundle.crt
             export PS1='\u@nixterm:\w\$ '
 
-            mkdir -p /dev /proc /sys /run /tmp /root
+            mkdir -p /dev /proc /sys /run /tmp /root /etc
             mount -t devtmpfs devtmpfs /dev
             mkdir -p /dev/pts /dev/shm
             mount -t proc proc /proc
             mount -t sysfs sysfs /sys
             mount -t devpts devpts /dev/pts
             mount -t tmpfs tmpfs /dev/shm
+            mount -t tmpfs tmpfs /run
+            mount -t tmpfs tmpfs /tmp
+            mount -t tmpfs tmpfs /etc
             hostname nixterm
             chmod 1777 /tmp
 
@@ -48,7 +51,8 @@
             ip link set eth0 up
             ip address add 10.0.2.15/24 dev eth0
             ip route add default via 10.0.2.2
-            mkdir -p /etc
+            echo 'root:x:0:0:root:/root:${guest.bashInteractive}/bin/bash' > /etc/passwd
+            echo 'root:x:0:' > /etc/group
             echo 'nameserver 10.0.2.3' > /etc/resolv.conf
             mount -t 9p -o trans=virtio,version=9p2000.L hostshare /root || \
               echo 'warning: persistent Documents mount unavailable' >&2
@@ -62,19 +66,35 @@
             echo
             exec setsid cttyhack ${guest.bashInteractive}/bin/bash --noprofile --norc -i
           '';
-          passwd = host.writeText "nixterm-passwd" ''
-            root:x:0:0:root:/root:${guest.bashInteractive}/bin/bash
+          bootInit = host.writeScript "nixterm-boot-init" ''
+            #!${busybox}/bin/sh
+
+            mkdir -p /dev /new-root
+            mount -t devtmpfs devtmpfs /dev
+            mount -t squashfs -o ro /dev/vda /new-root
+            exec switch_root /new-root /init
           '';
-          group = host.writeText "nixterm-group" ''
-            root:x:0:
+          rootClosure = host.closureInfo {
+            rootPaths = [
+              runtimeInit
+              busybox
+            ]
+            ++ guestPackages;
+          };
+          rootImage = host.runCommand "nixterm-root.squashfs" { nativeBuildInputs = [ host.squashfsTools ]; } ''
+            mkdir -p root/{dev,etc,proc,root,run,sys,tmp}
+            while read -r path; do
+              cp -a --parents "$path" root
+            done < ${rootClosure}/store-paths
+            ln -s ${runtimeInit} root/init
+            mksquashfs root "$out" -noappend -comp lz4 -no-progress
           '';
           initrd = host.makeInitrd {
             name = "nixterm-initramfs";
-            compressor = "gzip";
-            compressorArgs = [ "-9n" ];
+            compressor = "cat";
             contents = [
               {
-                object = init;
+                object = bootInit;
                 symlink = "/init";
               }
               {
@@ -85,21 +105,14 @@
                 object = "${busybox}/sbin";
                 symlink = "/sbin";
               }
-              {
-                object = passwd;
-                symlink = "/etc/passwd";
-              }
-              {
-                object = group;
-                symlink = "/etc/group";
-              }
             ];
           };
         in
         host.runCommand "nixterm-linux-guest" { } ''
           mkdir -p "$out"
           cp ${kernel}/Image "$out/Image"
-          cp ${initrd}/initrd "$out/initramfs.cpio.gz"
+          cp ${initrd}/initrd "$out/initramfs.cpio"
+          cp ${rootImage} "$out/root.squashfs"
         '';
     in
     {
@@ -158,8 +171,10 @@
             name = "nixterm-prepare-guest";
             text = ''
               mkdir -p Resources/Guest
+              rm -f Resources/Guest/initramfs.cpio.gz Resources/Guest/initramfs.cpio.lz4
               install -m 0644 ${guestBundle}/Image Resources/Guest/Image
-              install -m 0644 ${guestBundle}/initramfs.cpio.gz Resources/Guest/initramfs.cpio.gz
+              install -m 0644 ${guestBundle}/initramfs.cpio Resources/Guest/initramfs.cpio
+              install -m 0644 ${guestBundle}/root.squashfs Resources/Guest/root.squashfs
             '';
           };
           buildInstall = pkgs.writeShellApplication {
