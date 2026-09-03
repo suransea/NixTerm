@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+DerivedData/
+NixTerm.xcodeproj/
+Resources/Guest/
+result
+xcuserdata/
+*.xcuserstate
+.DS_Store

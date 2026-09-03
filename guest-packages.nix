@@ -1,0 +1,21 @@
+guest: with guest; [
+  bashInteractive
+  cacert
+  coreutils
+  curl
+  diffutils
+  file
+  findutils
+  gawk
+  gitMinimal
+  gnugrep
+  gnused
+  gnutar
+  gzip
+  less
+  openssh
+  procps
+  util-linux
+  which
+  xz
+]
