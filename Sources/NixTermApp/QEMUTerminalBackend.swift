@@ -12,12 +12,24 @@ final class QEMUTerminalBackend {
     private var serialProbe = Data()
     private var startedAt = Date()
     private var reportedReady = false
+    private var releaseInputOnConnect = false
+    private var autoLoginFreeBSD = false
+    private var sentFreeBSDLogin = false
 
     private let snapshotMarker = Data("\u{1B}]777;nixterm-snapshot-ready\u{07}".utf8)
     private let readyMarker = Data("\u{1B}]777;nixterm-ready\u{07}".utf8)
+    private let loginPrompt = Data("login:".utf8)
 
     func start(output: @escaping (Data) -> Void) {
         self.output = output
+
+        if let disk = Bundle.main.url(forResource: "FreeBSD", withExtension: "qcow2"),
+           let overlay = Bundle.main.url(forResource: "FreeBSD-overlay", withExtension: "qcow2"),
+           let firmware = Bundle.main.url(forResource: "QEMU_EFI", withExtension: "fd")
+        {
+            startFreeBSD(baseDisk: disk, overlayTemplate: overlay, firmware: firmware)
+            return
+        }
 
         guard
             let kernel = Bundle.main.url(forResource: "Image", withExtension: nil),
@@ -84,6 +96,98 @@ final class QEMUTerminalBackend {
         }
     }
 
+    private func startFreeBSD(baseDisk: URL, overlayTemplate: URL, firmware: URL) {
+        report("Preparing FreeBSD...\r\n")
+        queue.async { [weak self] in
+            guard let self,
+                  let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+                  let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+                  let digest = QuickStartController.signedResourceDigest(named: "FreeBSD.qcow2")
+            else {
+                self?.report("Unable to prepare the FreeBSD disk.\r\n")
+                return
+            }
+
+            do {
+                try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+                let storage = support.appendingPathComponent("freebsd-\(digest)", isDirectory: true)
+                try FileManager.default.createDirectory(at: storage, withIntermediateDirectories: true)
+                let storedBase = storage.appendingPathComponent("FreeBSD.qcow2")
+                let initialOverlay = storage.appendingPathComponent("FreeBSD-overlay.qcow2")
+                let currentLayerFile = storage.appendingPathComponent("current-layer")
+                if !FileManager.default.fileExists(atPath: storedBase.path) {
+                    try FileManager.default.copyItem(at: baseDisk, to: storedBase)
+                }
+                if !FileManager.default.fileExists(atPath: initialOverlay.path) {
+                    try FileManager.default.copyItem(at: overlayTemplate, to: initialOverlay)
+                }
+                let currentName = (try? String(contentsOf: currentLayerFile, encoding: .utf8)) ?? initialOverlay.lastPathComponent
+                let disk = storage.appendingPathComponent(currentName)
+                guard FileManager.default.fileExists(atPath: disk.path) else {
+                    report("Unable to locate the active FreeBSD disk layer.\r\n")
+                    return
+                }
+                let nextDisk = storage.appendingPathComponent("layer-\(UUID().uuidString).qcow2")
+
+                autoLoginFreeBSD = true
+                quickStart = QuickStartController(
+                    report: { [weak self] message in self?.report(message) },
+                    releaseGuest: { [weak self] in self?.releaseGuestBarrier() },
+                    resources: ["FreeBSD.qcow2", "FreeBSD-overlay.qcow2", "QEMU_EFI.fd"],
+                    namePrefix: "nixterm-freebsd-quickstart-v1",
+                    activeDiskURL: disk,
+                    nextDiskURL: nextDisk,
+                    minimumStableDiskSize: 1_048_576,
+                    diskDidPivot: { url in
+                        try? url.lastPathComponent.write(to: currentLayerFile, atomically: true, encoding: .utf8)
+                    }
+                )
+                startedAt = Date()
+                let serialPort: UInt16 = 37733
+                let monitorPort: UInt16 = 37734
+                var arguments = [
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "cortex-a53",
+                    "-accel", "tcg,thread=single,tb-size=64",
+                    "-rtc", "base=utc,clock=host",
+                    "-smp", "1",
+                    "-m", "512",
+                    "-nodefaults",
+                    "-nographic",
+                    "-no-reboot",
+                    "-audio", "none",
+                    "-netdev", "user,id=net0",
+                    "-device", "virtio-net-pci,netdev=net0,romfile=",
+                    "-device", "virtio-rng-pci,romfile=",
+                    "-drive", "file=\(disk.path),format=qcow2,if=none,id=rootfs",
+                    "-device", "virtio-blk-pci,drive=rootfs,bootindex=1,romfile=",
+                    "-virtfs", "local,path=\(documents.path),mount_tag=hostshare,security_model=none,id=hostshare",
+                    "-bios", firmware.path,
+                    "-chardev", "socket,id=serial0,host=127.0.0.1,port=\(serialPort),server=on,wait=off",
+                    "-serial", "chardev:serial0",
+                    "-qmp", "tcp:127.0.0.1:\(monitorPort),server=on,wait=off",
+                ]
+                if quickStart?.shouldRestore == true {
+                    arguments += ["-incoming", "defer"]
+                }
+                report(quickStart?.shouldRestore == true ? "Restoring quick start...\r\n" : "Booting FreeBSD...\r\n")
+                runner.start(withArguments: arguments) { [weak self] error in
+                    guard let self else { return }
+                    if let error {
+                        report("QEMU failed: \(error.localizedDescription)\r\n")
+                        return
+                    }
+                    queue.async {
+                        self.connect(to: serialPort)
+                    }
+                    quickStart?.connect(to: monitorPort)
+                }
+            } catch {
+                report("Unable to prepare the FreeBSD disk: \(error.localizedDescription)\r\n")
+            }
+        }
+    }
+
     func send(_ data: Data) {
         queue.async { [weak self] in
             guard let self, acceptingInput else { return }
@@ -136,6 +240,9 @@ final class QEMUTerminalBackend {
             }
             if result == 0 {
                 socketDescriptor = descriptor
+                if releaseInputOnConnect {
+                    acceptingInput = true
+                }
                 readQueue.async { [weak self] in
                     self?.readOutput(from: descriptor)
                 }
@@ -165,6 +272,12 @@ final class QEMUTerminalBackend {
                     quickStart.guestReachedBarrier()
                 } else {
                     releaseGuestBarrier()
+                }
+            }
+            if autoLoginFreeBSD, !sentFreeBSDLogin, serialProbe.range(of: loginPrompt) != nil {
+                sentFreeBSDLogin = true
+                queue.async { [weak self] in
+                    self?.write(Data("root\r".utf8))
                 }
             }
             if !reportedReady, serialProbe.range(of: readyMarker) != nil {

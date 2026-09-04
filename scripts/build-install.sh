@@ -2,12 +2,13 @@
 set -euo pipefail
 
 usage() {
-  printf 'Usage: nix run .#build-install -- --team-id TEAM --bundle-id ID --device DEVICE_ID\n' >&2
+  printf 'Usage: nix run .#build-install -- --guest nixos|freebsd --team-id TEAM --bundle-id ID --device DEVICE_ID\n' >&2
 }
 
 team_id=""
 bundle_id="dev.nixterm.app"
 device_id=""
+guest=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -21,6 +22,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --device)
       device_id="${2:-}"
+      shift 2
+      ;;
+    --guest)
+      guest="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -43,6 +48,10 @@ if [[ -z "$team_id" || -z "$device_id" ]]; then
   usage
   exit 2
 fi
+if [[ -n "$guest" && "$guest" != nixos && "$guest" != freebsd ]]; then
+  usage
+  exit 2
+fi
 
 if [[ ! -d "${QEMU_FRAMEWORKS:-.build/QEMU/Frameworks}" ]]; then
   printf 'QEMU frameworks are missing. Set QEMU_FRAMEWORKS or populate .build/QEMU/Frameworks.\n' >&2
@@ -50,13 +59,14 @@ if [[ ! -d "${QEMU_FRAMEWORKS:-.build/QEMU/Frameworks}" ]]; then
 fi
 if [[ -n "${GUEST_BUNDLE:-}" ]]; then
   mkdir -p Resources/Guest
-  rm -f Resources/Guest/initramfs.cpio.gz Resources/Guest/initramfs.cpio.lz4
-  install -m 0644 "$GUEST_BUNDLE/Image" Resources/Guest/Image
-  install -m 0644 "$GUEST_BUNDLE/initramfs.cpio" Resources/Guest/initramfs.cpio
-  install -m 0644 "$GUEST_BUNDLE/root.squashfs" Resources/Guest/root.squashfs
+  rm -rf Resources/Guest/*
+  cp -a "$GUEST_BUNDLE"/. Resources/Guest/
+elif [[ -n "$guest" ]]; then
+  nix run .#prepare-guest -- --guest "$guest"
 fi
-if [[ ! -s Resources/Guest/Image || ! -s Resources/Guest/initramfs.cpio || ! -s Resources/Guest/root.squashfs ]]; then
-  printf 'Guest resources are missing. Run nix run .#prepare-guest first.\n' >&2
+if [[ ! -s Resources/Guest/FreeBSD.qcow2 || ! -s Resources/Guest/FreeBSD-overlay.qcow2 || ! -s Resources/Guest/QEMU_EFI.fd ]] && \
+   [[ ! -s Resources/Guest/Image || ! -s Resources/Guest/initramfs.cpio || ! -s Resources/Guest/root.squashfs ]]; then
+  printf 'Guest resources are missing. Run nix run .#prepare-guest -- --guest nixos|freebsd first.\n' >&2
   exit 1
 fi
 xcodegen generate
@@ -89,7 +99,7 @@ done
   DEVELOPMENT_TEAM="$team_id" \
   PRODUCT_BUNDLE_IDENTIFIER="$bundle_id" \
   CODE_SIGN_STYLE=Automatic \
-  build | xcbeautify
+  clean build | xcbeautify
 
 app_path="$derived_data/Build/Products/Debug-iphoneos/NixTerm.app"
 xcrun devicectl device install app --device "$device_id" "$app_path"

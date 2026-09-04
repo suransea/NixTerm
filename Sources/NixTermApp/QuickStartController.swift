@@ -6,6 +6,10 @@ final class QuickStartController {
     private let readQueue = DispatchQueue(label: "dev.nixterm.qemu.quick-start.read", qos: .userInteractive)
     private let snapshotURL: URL
     private let temporaryURL: URL
+    private let diskSizeURL: URL?
+    private let minimumStableDiskSize: Int?
+    private let nextDiskURL: URL?
+    private let diskDidPivot: ((URL) -> Void)?
     private let report: (String) -> Void
     private let releaseGuest: () -> Void
     private var descriptor: Int32 = -1
@@ -15,32 +19,64 @@ final class QuickStartController {
     private var operationStarted = false
     private var pollCount = 0
     private var operationStartedAt = Date()
+    private var pivotedDiskURL: URL?
 
     let shouldRestore: Bool
 
-    init?(report: @escaping (String) -> Void, releaseGuest: @escaping () -> Void) {
+    init?(
+        report: @escaping (String) -> Void,
+        releaseGuest: @escaping () -> Void,
+        resources: [String] = ["Image", "root.squashfs"],
+        namePrefix: String = "nixterm-quickstart-v2",
+        activeDiskURL: URL? = nil,
+        nextDiskURL: URL? = nil,
+        minimumStableDiskSize: Int? = nil,
+        diskDidPivot: ((URL) -> Void)? = nil
+    ) {
         guard let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
-              let kernelDigest = Self.signedResourceDigest(named: "Image"),
-              let rootDigest = Self.signedResourceDigest(named: "root.squashfs")
+              let resourceDigest = Self.resourceDigest(names: resources)
         else { return nil }
 
-        let name = "nixterm-quickstart-v2-\(kernelDigest)-\(rootDigest).bin"
+        let name = "\(namePrefix)-\(resourceDigest).bin"
         snapshotURL = cache.appendingPathComponent(name)
         temporaryURL = snapshotURL.appendingPathExtension("tmp")
+        diskSizeURL = activeDiskURL == nil ? nil : snapshotURL.appendingPathExtension("disk-size")
+        self.minimumStableDiskSize = minimumStableDiskSize
+        self.nextDiskURL = nextDiskURL
+        self.diskDidPivot = diskDidPivot
         self.report = report
         self.releaseGuest = releaseGuest
-        shouldRestore = FileManager.default.fileExists(atPath: snapshotURL.path)
+        try? FileManager.default.removeItem(at: temporaryURL)
+
+        var canRestore = FileManager.default.fileExists(atPath: snapshotURL.path)
+        if let activeDiskURL, let diskSizeURL {
+            let savedSize = try? String(contentsOf: diskSizeURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+            let maximumSize = savedSize.flatMap(Int.init)
+            let currentSize = Self.fileSize(activeDiskURL)
+            if let maximumSize, let currentSize {
+                canRestore = canRestore && currentSize <= maximumSize
+            } else {
+                canRestore = false
+            }
+        }
+        shouldRestore = canRestore
+        if !canRestore {
+            try? FileManager.default.removeItem(at: snapshotURL)
+            if let diskSizeURL {
+                try? FileManager.default.removeItem(at: diskSizeURL)
+            }
+        }
 
         if let files = try? FileManager.default.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil) {
             for file in files
-                where file.lastPathComponent.hasPrefix("nixterm-quickstart-") && file.lastPathComponent != name
+                where file.lastPathComponent.hasPrefix("\(namePrefix)-") && !file.lastPathComponent.hasPrefix(name)
             {
                 try? FileManager.default.removeItem(at: file)
             }
         }
     }
 
-    private static func signedResourceDigest(named name: String) -> String? {
+    static func signedResourceDigest(named name: String) -> String? {
         let manifest = Bundle.main.bundleURL
             .appendingPathComponent("_CodeSignature")
             .appendingPathComponent("CodeResources")
@@ -53,6 +89,17 @@ final class QuickStartController {
         else { return nil }
 
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func resourceDigest(names: [String]) -> String? {
+        let digests = names.compactMap(signedResourceDigest)
+        guard digests.count == names.count else { return nil }
+        return digests.joined(separator: "-")
+    }
+
+    private static func fileSize(_ url: URL) -> Int? {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? NSNumber)?.intValue
     }
 
     func connect(to port: UInt16) {
@@ -159,7 +206,28 @@ final class QuickStartController {
             shouldRestore ? startRestore() : startSaveIfPossible()
         case "stop-save":
             operationStartedAt = Date()
-            send("migrate", arguments: ["uri": "file:\(temporaryURL.path)"], id: "save")
+            if let nextDiskURL {
+                try? FileManager.default.removeItem(at: nextDiskURL)
+                send(
+                    "blockdev-snapshot-sync",
+                    arguments: [
+                        "device": "rootfs",
+                        "snapshot-file": nextDiskURL.path,
+                        "format": "qcow2",
+                    ],
+                    id: "snapshot-save"
+                )
+            } else {
+                startMigrationSave()
+            }
+        case "snapshot-save":
+            guard let nextDiskURL, Self.fileSize(nextDiskURL) != nil else {
+                fail("Writable disk snapshot was not created")
+                return
+            }
+            pivotedDiskURL = nextDiskURL
+            diskDidPivot?(nextDiskURL)
+            startMigrationSave()
         case "save":
             pollMigration(id: "query-save")
         case "restore":
@@ -194,6 +262,10 @@ final class QuickStartController {
         send("stop", id: "stop-save")
     }
 
+    private func startMigrationSave() {
+        send("migrate", arguments: ["uri": "file:\(temporaryURL.path)"], id: "save")
+    }
+
     private func startRestore() {
         guard !operationStarted else { return }
         operationStarted = true
@@ -217,7 +289,17 @@ final class QuickStartController {
         do {
             try? FileManager.default.removeItem(at: snapshotURL)
             try FileManager.default.moveItem(at: temporaryURL, to: snapshotURL)
+            if let diskSizeURL, let pivotedDiskURL, let size = Self.fileSize(pivotedDiskURL) {
+                let maximumSize = max(size, minimumStableDiskSize ?? size)
+                try "\(maximumSize)".write(to: diskSizeURL, atomically: true, encoding: .utf8)
+            } else if diskSizeURL != nil {
+                throw CocoaError(.fileReadUnknown)
+            }
         } catch {
+            try? FileManager.default.removeItem(at: snapshotURL)
+            if let diskSizeURL {
+                try? FileManager.default.removeItem(at: diskSizeURL)
+            }
             fail(error.localizedDescription)
             return
         }
@@ -236,6 +318,9 @@ final class QuickStartController {
         try? FileManager.default.removeItem(at: temporaryURL)
         if shouldRestore {
             try? FileManager.default.removeItem(at: snapshotURL)
+            if let diskSizeURL {
+                try? FileManager.default.removeItem(at: diskSizeURL)
+            }
             report("Quick start failed: \(reason). Relaunch NixTerm to rebuild it.\r\n")
         } else {
             report("Quick start unavailable: \(reason).\r\n")
