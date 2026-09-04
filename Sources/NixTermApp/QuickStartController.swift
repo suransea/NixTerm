@@ -20,6 +20,8 @@ final class QuickStartController {
     private var pollCount = 0
     private var operationStartedAt = Date()
     private var pivotedDiskURL: URL?
+    private var monitorPort: UInt16?
+    private var pendingMigrationID: String?
 
     let shouldRestore: Bool
 
@@ -104,7 +106,17 @@ final class QuickStartController {
 
     func connect(to port: UInt16) {
         queue.async { [weak self] in
-            self?.connectMonitor(to: port)
+            guard let self else { return }
+            monitorPort = port
+            guard descriptor < 0 else { return }
+            connectMonitor(to: port)
+        }
+    }
+
+    func resume() {
+        queue.async { [weak self] in
+            guard let self, descriptor < 0, let monitorPort else { return }
+            connectMonitor(to: monitorPort)
         }
     }
 
@@ -173,6 +185,11 @@ final class QuickStartController {
                 self?.consume(data)
             }
         }
+        queue.async { [weak self] in
+            guard let self, descriptor == socket else { return }
+            Darwin.close(descriptor)
+            descriptor = -1
+        }
     }
 
     private func consume(_ data: Data) {
@@ -203,7 +220,11 @@ final class QuickStartController {
         switch id {
         case "capabilities":
             qmpReady = true
-            shouldRestore ? startRestore() : startSaveIfPossible()
+            if let pendingMigrationID {
+                pollMigration(id: pendingMigrationID)
+            } else {
+                shouldRestore ? startRestore() : startSaveIfPossible()
+            }
         case "stop-save":
             operationStartedAt = Date()
             if let nextDiskURL {
@@ -263,6 +284,7 @@ final class QuickStartController {
     }
 
     private func startMigrationSave() {
+        pendingMigrationID = "query-save"
         send("migrate", arguments: ["uri": "file:\(temporaryURL.path)"], id: "save")
     }
 
@@ -271,6 +293,7 @@ final class QuickStartController {
         operationStarted = true
         operationStartedAt = Date()
         pollCount = 0
+        pendingMigrationID = "query-restore"
         send("migrate-incoming", arguments: ["uri": "file:\(snapshotURL.path)"], id: "restore")
     }
 
@@ -286,6 +309,7 @@ final class QuickStartController {
     }
 
     private func finishSave() {
+        pendingMigrationID = nil
         do {
             try? FileManager.default.removeItem(at: snapshotURL)
             try FileManager.default.moveItem(at: temporaryURL, to: snapshotURL)
@@ -309,12 +333,14 @@ final class QuickStartController {
     }
 
     private func finishRestore() {
+        pendingMigrationID = nil
         report(String(format: "Quick start restored in %.2fs.\r\n", Date().timeIntervalSince(operationStartedAt)))
         send("cont", id: "continue-restore")
         releaseGuest()
     }
 
     private func fail(_ reason: String) {
+        pendingMigrationID = nil
         try? FileManager.default.removeItem(at: temporaryURL)
         if shouldRestore {
             try? FileManager.default.removeItem(at: snapshotURL)

@@ -10,7 +10,6 @@ struct TerminalView: UIViewRepresentable {
     func updateUIView(_: TerminalScrollContainer, context _: Context) {}
 
     static func dismantleUIView(_ view: TerminalScrollContainer, coordinator _: Void) {
-        view.terminalView.stop()
         view.terminalView.updateUiClosed()
     }
 }
@@ -104,7 +103,8 @@ final class TerminalScrollContainer: UIView, UIScrollViewDelegate {
 @MainActor
 final class LinuxTerminalView: SwiftTerm.TerminalView, TerminalViewDelegate {
     private static let oneDarkBackground = UIColor(red: 0.157, green: 0.173, blue: 0.204, alpha: 1)
-    private let backend = QEMUTerminalBackend()
+    private let backend = QEMUTerminalBackend.shared
+    private var foregroundObserver: NSObjectProtocol?
     weak var scrollContainer: TerminalScrollContainer?
 
     override var contentSize: CGSize {
@@ -147,6 +147,17 @@ final class LinuxTerminalView: SwiftTerm.TerminalView, TerminalViewDelegate {
         optionAsMetaKey = true
         keyboardAppearance = .dark
         inputAccessoryView = TerminalKeyboardAccessory(container: self)
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.backend.resume()
+                _ = self.becomeFirstResponder()
+            }
+        }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             backend.start { [weak self] data in
@@ -162,6 +173,12 @@ final class LinuxTerminalView: SwiftTerm.TerminalView, TerminalViewDelegate {
     @available(*, unavailable)
     required init?(coder _: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+        }
     }
 
     func send(source _: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {

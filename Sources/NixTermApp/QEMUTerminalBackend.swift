@@ -2,6 +2,8 @@ import Darwin
 import Foundation
 
 final class QEMUTerminalBackend {
+    static let shared = QEMUTerminalBackend()
+
     private let queue = DispatchQueue(label: "dev.nixterm.qemu.serial", qos: .userInteractive)
     private let readQueue = DispatchQueue(label: "dev.nixterm.qemu.serial.read", qos: .userInteractive)
     private let runner = NixTermQEMURunner()
@@ -15,6 +17,7 @@ final class QEMUTerminalBackend {
     private var releaseInputOnConnect = false
     private var autoLoginFreeBSD = false
     private var sentFreeBSDLogin = false
+    private var started = false
 
     private let snapshotMarker = Data("\u{1B}]777;nixterm-snapshot-ready\u{07}".utf8)
     private let readyMarker = Data("\u{1B}]777;nixterm-ready\u{07}".utf8)
@@ -22,6 +25,11 @@ final class QEMUTerminalBackend {
 
     func start(output: @escaping (Data) -> Void) {
         self.output = output
+        guard !started else {
+            resume()
+            return
+        }
+        started = true
 
         if let disk = Bundle.main.url(forResource: "FreeBSD", withExtension: "qcow2"),
            let overlay = Bundle.main.url(forResource: "FreeBSD-overlay", withExtension: "qcow2"),
@@ -192,6 +200,14 @@ final class QEMUTerminalBackend {
         queue.async { [weak self] in
             guard let self, acceptingInput else { return }
             write(data)
+        }
+    }
+
+    func resume() {
+        quickStart?.resume()
+        queue.async { [weak self] in
+            guard let self, socketDescriptor < 0 else { return }
+            connect(to: 37733)
         }
     }
 
