@@ -120,6 +120,7 @@
             # QEMU cannot migrate an attached 9p export, so pause immediately before mounting it.
             printf '\033]777;nixterm-snapshot-ready\007'
             read -r _ </dev/ttyAMA0
+            hwclock --hctosys --utc || echo 'warning: unable to synchronize guest clock' >&2
             mount -t 9p -o trans=virtio,version=9p2000.L hostshare /root || \
               echo 'warning: persistent Documents mount unavailable' >&2
             cd /root

@@ -18,14 +18,13 @@ final class QuickStartController {
 
     let shouldRestore: Bool
 
-    init?(rootFileSystem: URL, report: @escaping (String) -> Void, releaseGuest: @escaping () -> Void) {
+    init?(report: @escaping (String) -> Void, releaseGuest: @escaping () -> Void) {
         guard let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
-              let attributes = try? FileManager.default.attributesOfItem(atPath: rootFileSystem.path),
-              let size = attributes[.size] as? NSNumber,
-              let modified = attributes[.modificationDate] as? Date
+              let kernelDigest = Self.signedResourceDigest(named: "Image"),
+              let rootDigest = Self.signedResourceDigest(named: "root.squashfs")
         else { return nil }
 
-        let name = "nixterm-quickstart-v1-\(size.int64Value)-\(Int(modified.timeIntervalSince1970)).bin"
+        let name = "nixterm-quickstart-v2-\(kernelDigest)-\(rootDigest).bin"
         snapshotURL = cache.appendingPathComponent(name)
         temporaryURL = snapshotURL.appendingPathExtension("tmp")
         self.report = report
@@ -39,6 +38,21 @@ final class QuickStartController {
                 try? FileManager.default.removeItem(at: file)
             }
         }
+    }
+
+    private static func signedResourceDigest(named name: String) -> String? {
+        let manifest = Bundle.main.bundleURL
+            .appendingPathComponent("_CodeSignature")
+            .appendingPathComponent("CodeResources")
+        guard let contents = try? Data(contentsOf: manifest),
+              let propertyList = try? PropertyListSerialization.propertyList(from: contents, format: nil),
+              let dictionary = propertyList as? [String: Any],
+              let files = dictionary["files2"] as? [String: Any],
+              let entry = files[name] as? [String: Any],
+              let digest = entry["hash2"] as? Data
+        else { return nil }
+
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     func connect(to port: UInt16) {

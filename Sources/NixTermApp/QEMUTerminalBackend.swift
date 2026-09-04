@@ -39,7 +39,6 @@ final class QEMUTerminalBackend {
             try? contents.write(to: readme, atomically: true, encoding: .utf8)
         }
         quickStart = QuickStartController(
-            rootFileSystem: rootFileSystem,
             report: { [weak self] message in self?.report(message) },
             releaseGuest: { [weak self] in self?.releaseGuestBarrier() }
         )
@@ -48,7 +47,7 @@ final class QEMUTerminalBackend {
             "-machine", "virt",
             "-cpu", "cortex-a53",
             "-accel", "tcg,thread=single,tb-size=64",
-            "-rtc", "clock=vm",
+            "-rtc", "base=utc,clock=host",
             "-smp", "1",
             "-m", "256",
             "-nodefaults",
